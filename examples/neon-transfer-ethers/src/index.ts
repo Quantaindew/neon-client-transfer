@@ -6,18 +6,20 @@ import { delay } from './utils';
 const tokensData = require('token-list/tokenlist.json');
 
 const chainId = parseInt(`0xe9ac0ce`);
-const supportedTokens = ['USDT', 'USDC'];
+const supportedTokens = ['wSOL', 'SOL'];
+
 const tokens = (tokensData?.tokens as SPLToken[] ?? []).filter(t => t.chainId === chainId).filter(t => supportedTokens.includes(t.symbol));
+console.log(tokens);
 
 (async function main() {
-  await transferNeonToSolana(0.1);
-  await delay(10);
-  await transferNeonToNeon(0.1);
-  await delay(10);
+  // await transferNeonToSolana(0.1);
+  // await delay(10);
+  // await transferNeonToNeon(0.1);
+  // await delay(10);
 
   for (const token of tokens) {
-    await transferERC20TokenToSolana(token, 0.1);
-    await delay(10);
+    // await transferERC20TokenToSolana(token, 0.1);
+    // await delay(10);
     await transferSPLTokenToNeonEvm(token, 0.1);
     await delay(10);
   }
