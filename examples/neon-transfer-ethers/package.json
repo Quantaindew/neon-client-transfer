@@ -17,11 +17,14 @@
     "@neonevm/token-transfer-ethers": "4.4.1-devnet",
     "big.js": "^6.2.1",
     "bn.js": "^5.2.1",
-    "ethers": "^6.13.2"
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.2",
+    "token-list": "https://github.com/neonlabsorg/token-list.git"
   },
   "devDependencies": {
     "@types/big.js": "^6.2.2",
     "@types/bn.js": "^5.1.5",
+    "@types/bs58": "^4.0.4",
     "nodemon": "^3.0.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
