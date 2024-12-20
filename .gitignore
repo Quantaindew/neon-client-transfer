@@ -8,3 +8,4 @@ tmp.json
 imp
 .nx/cache
 *.tsbuildinfo
+.env
