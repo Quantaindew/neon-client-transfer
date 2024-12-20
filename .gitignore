@@ -9,3 +9,6 @@ imp
 .nx/cache
 *.tsbuildinfo
 .env
+codebase.md
+*.lock
+package-lock.json
