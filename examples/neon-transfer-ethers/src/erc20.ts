@@ -1,5 +1,11 @@
-import { Connection, Keypair, PublicKey } from '@solana/web3.js';
-import { getAccount, getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { 
+  getAccount, 
+  getAssociatedTokenAddressSync, 
+  createAssociatedTokenAccountInstruction, 
+  createSyncNativeInstruction, 
+  NATIVE_MINT 
+} from '@solana/spl-token';
 import {
   createAssociatedTokenAccountTransaction,
   NeonProxyRpcApi,
@@ -31,6 +37,49 @@ const neonEvmProgram = new PublicKey(`eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETG
 const chainId = parseInt(`0xe9ac0ce`);
 
 const neonProxyRpcApi = new NeonProxyRpcApi(proxyUrl);
+
+export async function convertSOLToWSOL(amount: number): Promise<string> {
+  const walletBalance = await connection.getBalance(solanaWallet.publicKey);
+  const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(0);
+  
+  if (walletBalance < amount * 1e9 + rentExemptBalance) {
+    throw new Error('Insufficient SOL balance');
+  }
+
+  const associatedTokenAccount = getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    solanaWallet.publicKey
+  );
+
+  const transaction = new Transaction();
+  
+  // Create token account if it doesn't exist
+  try {
+    await getAccount(connection, associatedTokenAccount);
+  } catch (e) {
+    transaction.add(
+      createAssociatedTokenAccountInstruction(
+        solanaWallet.publicKey,
+        associatedTokenAccount,
+        solanaWallet.publicKey,
+        NATIVE_MINT
+      )
+    );
+  }
+
+  // Transfer SOL to token account
+  transaction.add(
+    SystemProgram.transfer({
+      fromPubkey: solanaWallet.publicKey,
+      toPubkey: associatedTokenAccount,
+      lamports: amount * 1e9
+    }),
+    createSyncNativeInstruction(associatedTokenAccount)
+  );
+
+  const signature = await sendSolanaTransaction(connection, transaction, [toSigner(solanaWallet)], true);
+  return signature;
+}
 
 export async function transferSPLTokenToNeonEvm(token: SPLToken, amount: number): Promise<any> {
   const walletSigner = new Wallet(keccak256(Buffer.from(`${neonWallet.address.slice(2)}${solanaWallet.publicKey.toBase58()}`, 'utf-8')), provider);
