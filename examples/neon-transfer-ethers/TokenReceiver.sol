@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-contract ETHReceiver {
+interface IERC20 {
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+
+contract TokenReceiver {
     address public owner;
+    IERC20 public constant TOKEN = IERC20(0xc7Fc9b46e479c5Cb42f6C458D1881e55E6B7986c);
     
     // Struct to store transfer details with nullifier
     struct Transfer {
         uint256 amount;
         uint256 timestamp;
-        uint256 nullifier; // Added nullifier field
+        uint256 nullifier;
     }
     
     // Mapping from sender address to their latest transfer
     mapping(address => Transfer) public latestTransfers;
     
     // Events
-    event ETHReceived(address indexed sender, uint256 amount, uint256 timestamp, uint256 nullifier);
-    event ETHWithdrawn(address indexed to, uint256 amount);
+    event TokenReceived(address indexed sender, uint256 amount, uint256 timestamp, uint256 nullifier);
+    event TokenWithdrawn(address indexed to, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     
     // Modifiers
@@ -31,30 +38,19 @@ contract ETHReceiver {
         emit OwnershipTransferred(address(0), msg.sender);
     }
     
-    // Function to receive ETH with nullifier
-    function receiveWithNullifier(uint256 nullifier) external payable {
+    // Function to receive tokens with nullifier
+    function receiveWithNullifier(uint256 amount, uint256 nullifier) external {
+        require(TOKEN.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        
         // Record the transfer with nullifier
         latestTransfers[msg.sender] = Transfer({
-            amount: msg.value,
+            amount: amount,
             timestamp: block.timestamp,
             nullifier: nullifier
         });
         
         // Emit event
-        emit ETHReceived(msg.sender, msg.value, block.timestamp, nullifier);
-    }
-    
-    // Fallback function to receive ETH
-    receive() external payable {
-        // Record the transfer with zero nullifier for backward compatibility
-        latestTransfers[msg.sender] = Transfer({
-            amount: msg.value,
-            timestamp: block.timestamp,
-            nullifier: 0
-        });
-        
-        // Emit event
-        emit ETHReceived(msg.sender, msg.value, block.timestamp, 0);
+        emit TokenReceived(msg.sender, amount, block.timestamp, nullifier);
     }
     
     // Function to get latest transfer details
@@ -65,34 +61,32 @@ contract ETHReceiver {
     
     // Withdrawal functions
     function withdraw() external onlyOwner {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No ETH to withdraw");
+        uint256 balance = TOKEN.balanceOf(address(this));
+        require(balance > 0, "No tokens to withdraw");
         
-        (bool success, ) = owner.call{value: balance}("");
-        require(success, "Withdrawal failed");
+        require(TOKEN.transfer(owner, balance), "Withdrawal failed");
         
-        emit ETHWithdrawn(owner, balance);
+        emit TokenWithdrawn(owner, balance);
     }
     
-    function withdrawTo(address payable to, uint256 amount) external onlyOwner {
+    function withdrawTo(address to, uint256 amount) external onlyOwner {
         require(to != address(0), "Invalid address");
-        require(amount <= address(this).balance, "Insufficient balance");
+        uint256 balance = TOKEN.balanceOf(address(this));
+        require(amount <= balance, "Insufficient balance");
         
-        (bool success, ) = to.call{value: amount}("");
-        require(success, "Withdrawal failed");
+        require(TOKEN.transfer(to, amount), "Withdrawal failed");
         
-        emit ETHWithdrawn(to, amount);
+        emit TokenWithdrawn(to, amount);
     }
     
     // Emergency drain
     function drain() external onlyOwner {
-        uint256 balance = address(this).balance;
-        require(balance > 0, "No ETH to drain");
+        uint256 balance = TOKEN.balanceOf(address(this));
+        require(balance > 0, "No tokens to drain");
         
-        (bool success, ) = owner.call{value: balance}("");
-        require(success, "Drain failed");
+        require(TOKEN.transfer(owner, balance), "Drain failed");
         
-        emit ETHWithdrawn(owner, balance);
+        emit TokenWithdrawn(owner, balance);
     }
     
     // Transfer ownership
@@ -104,6 +98,6 @@ contract ETHReceiver {
     
     // View functions
     function getBalance() external view returns (uint256) {
-        return address(this).balance;
+        return TOKEN.balanceOf(address(this));
     }
 }
