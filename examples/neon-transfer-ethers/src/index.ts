@@ -1,6 +1,7 @@
+// index.ts
 import { SPLToken } from '@neonevm/token-transfer-core';
 import { transferNeonToNeon, transferNeonToSolana } from './neon';
-import { convertSOLToWSOL, transferERC20TokenToSolana, transferSPLTokenToNeonEvm } from './erc20';
+import { convertAndBridgeSOLToNeon, transferERC20TokenToSolana } from './erc20';
 import { delay } from './utils';
 
 const tokensData = require('token-list/tokenlist.json');
@@ -24,13 +25,9 @@ console.log(tokens);
 
   for (const token of tokens) {
     if (token.symbol === 'wSOL') {
-      console.log('Converting SOL to wSOL...');
-      const signature = await convertSOLToWSOL(amount);
-      console.log('SOL to wSOL conversion complete:', signature);
-      await delay(10);
-      
-      console.log('Bridging wSOL to Neon EVM...');
-      await transferSPLTokenToNeonEvm(token, amount);
+      console.log('Converting SOL to wSOL and bridging to Neon EVM...');
+      const signature = await convertAndBridgeSOLToNeon(token, amount);
+      console.log('Transaction signature:', signature);
       await delay(10);
     }
     

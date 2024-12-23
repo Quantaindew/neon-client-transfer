@@ -1,3 +1,4 @@
+// erc20.ts
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { 
   getAccount, 
@@ -95,7 +96,70 @@ export async function transferSPLTokenToNeonEvm(token: SPLToken, amount: number)
     chainId
   });
   const signature = await sendSolanaTransaction(connection, transaction, [toSigner(solanaWallet)]);
-  console.log(signature);
+  return signature;
+}
+
+export async function convertAndBridgeSOLToNeon(token: SPLToken, amount: number): Promise<string> {
+  // First check SOL balance
+  const walletBalance = await connection.getBalance(solanaWallet.publicKey);
+  const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(0);
+  
+  if (walletBalance < amount * 1e9 + rentExemptBalance) {
+    throw new Error('Insufficient SOL balance');
+  }
+
+  const associatedTokenAccount = getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    solanaWallet.publicKey
+  );
+
+  // Create single transaction for both operations
+  const transaction = new Transaction();
+  
+  // Check if token account exists and create if needed
+  try {
+    await getAccount(connection, associatedTokenAccount);
+  } catch (e) {
+    transaction.add(
+      createAssociatedTokenAccountInstruction(
+        solanaWallet.publicKey,
+        associatedTokenAccount,
+        solanaWallet.publicKey,
+        NATIVE_MINT
+      )
+    );
+  }
+
+  // Add SOL to wSOL conversion instructions
+  transaction.add(
+    SystemProgram.transfer({
+      fromPubkey: solanaWallet.publicKey,
+      toPubkey: associatedTokenAccount,
+      lamports: amount * 1e9
+    }),
+    createSyncNativeInstruction(associatedTokenAccount)
+  );
+
+  // Add bridge instructions
+  const walletSigner = new Wallet(keccak256(Buffer.from(`${neonWallet.address.slice(2)}${solanaWallet.publicKey.toBase58()}`, 'utf-8')), provider);
+  const bridgeInstructions = await neonTransferMintTransactionEthers({
+    connection,
+    proxyApi: neonProxyRpcApi,
+    neonEvmProgram,
+    solanaWallet: solanaWallet.publicKey,
+    neonWallet: neonWallet.address,
+    walletSigner,
+    splToken: token,
+    amount,
+    chainId
+  });
+
+  // Add bridge instructions to the same transaction
+  transaction.add(...bridgeInstructions.instructions);
+
+  // Send the combined transaction
+  const signature = await sendSolanaTransaction(connection, transaction, [toSigner(solanaWallet)], true);
+  return signature;
 }
 
 export async function transferERC20TokenToSolana(token: SPLToken, amount: number): Promise<any> {
@@ -120,5 +184,5 @@ export async function transferERC20TokenToSolana(token: SPLToken, amount: number
     amount
   });
   const hash = await sendNeonTransactionEthers(transaction, neonWallet);
-  console.log(hash);
+  return hash;
 }
