@@ -99,7 +99,11 @@ export async function transferSPLTokenToNeonEvm(token: SPLToken, amount: number)
   return signature;
 }
 
-export async function convertAndBridgeSOLToNeon(token: SPLToken, amount: number): Promise<string> {
+export async function convertAndBridgeSOLToNeon(
+  token: SPLToken, 
+  amount: number,
+  receivingAddress: string // New parameter for the receiving address
+): Promise<string> {
   // First check SOL balance
   const walletBalance = await connection.getBalance(solanaWallet.publicKey);
   const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(0);
@@ -140,14 +144,19 @@ export async function convertAndBridgeSOLToNeon(token: SPLToken, amount: number)
     createSyncNativeInstruction(associatedTokenAccount)
   );
 
-  // Add bridge instructions
-  const walletSigner = new Wallet(keccak256(Buffer.from(`${neonWallet.address.slice(2)}${solanaWallet.publicKey.toBase58()}`, 'utf-8')), provider);
+  // Create a temporary wallet signer using the receiving address
+  const walletSigner = new Wallet(
+    keccak256(Buffer.from(`${receivingAddress.slice(2)}${solanaWallet.publicKey.toBase58()}`, 'utf-8')), 
+    provider
+  );
+
+  // Add bridge instructions using the receiving address
   const bridgeInstructions = await neonTransferMintTransactionEthers({
     connection,
     proxyApi: neonProxyRpcApi,
     neonEvmProgram,
     solanaWallet: solanaWallet.publicKey,
-    neonWallet: neonWallet.address,
+    neonWallet: receivingAddress, // Use the provided receiving address
     walletSigner,
     splToken: token,
     amount,

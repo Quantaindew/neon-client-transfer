@@ -16,6 +16,7 @@ console.log(tokens);
 
 (async function main() {
   const amount = 0.1;
+  const receivingAddress = '0xf111741a15435aBD3BEdBCcB4BAAF741e388fb28';
   
   // Uncomment these if you want to transfer NEON tokens
   // await transferNeonToSolana(0.1);
@@ -26,7 +27,7 @@ console.log(tokens);
   for (const token of tokens) {
     if (token.symbol === 'wSOL') {
       console.log('Converting SOL to wSOL and bridging to Neon EVM...');
-      const signature = await convertAndBridgeSOLToNeon(token, amount);
+      const signature = await convertAndBridgeSOLToNeon(token, amount, receivingAddress);
       console.log('Transaction signature:', signature);
       await delay(10);
     }
