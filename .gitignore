@@ -12,3 +12,5 @@ imp
 codebase.md
 *.lock
 package-lock.json
+neon-transfer-core.md
+neon-transfer-ethers.md
