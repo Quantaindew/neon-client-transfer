@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const NEON_PRIVATE = process.env.NEON_PRIVATE;
 const PHANTOM_PRIVATE = process.env.PHANTOM_PRIVATE;
+const TOKEN_RECEIVER_CONTRACT = "0x1D1e8864997A2c684008539e780Df6934B6E4704"
 
 // Updated configuration for SOL gas fee
 const proxyUrl = 'https://devnet.neonevm.org/solana/sol';
@@ -65,7 +66,7 @@ async function sendSOL(amount: number, receiverAddress: string) {
 }
 
 // Example usage:
-sendSOL(0.1, '0xf111741a15435abd3bedbccb4baaf741e388fb28')
+sendSOL(0.1, TOKEN_RECEIVER_CONTRACT)
   .then(console.table)
   .catch(console.error);
 
