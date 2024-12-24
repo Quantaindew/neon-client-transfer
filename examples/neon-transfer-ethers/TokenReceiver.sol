@@ -40,17 +40,17 @@ contract TokenReceiver {
     
     // Function to receive tokens with nullifier
     function receiveWithNullifier(uint256 amount, uint256 nullifier) external {
-        require(TOKEN.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        require(TOKEN.transferFrom(tx.origin, address(this), amount), "Transfer failed");
         
         // Record the transfer with nullifier
-        latestTransfers[msg.sender] = Transfer({
+        latestTransfers[tx.origin] = Transfer({
             amount: amount,
             timestamp: block.timestamp,
             nullifier: nullifier
         });
         
         // Emit event
-        emit TokenReceived(msg.sender, amount, block.timestamp, nullifier);
+        emit TokenReceived(tx.origin, amount, block.timestamp, nullifier);
     }
     
     // Function to get latest transfer details
