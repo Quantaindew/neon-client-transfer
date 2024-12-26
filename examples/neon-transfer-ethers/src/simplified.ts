@@ -1,32 +1,41 @@
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync, createAssociatedTokenAccountInstruction, createSyncNativeInstruction, createApproveInstruction } from '@solana/spl-token';
-import { JsonRpcProvider, keccak256, Wallet, Interface, Contract } from 'ethers';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Interface, JsonRpcProvider, Wallet, keccak256, parseUnits } from 'ethers';
 import { 
     NeonProxyRpcApi, 
     SPLToken, 
-    createAccountBalanceForLegacyAccountInstruction,
-    createExecFromDataInstructionV2,
-    createClaimInstruction,
-    authAccountAddress,
+    EvmInstruction,
+    collateralPoolAddress,
     holderAccountData,
-    EvmInstruction
+    neonBalanceProgramAddressV2
 } from '@neonevm/token-transfer-core';
-import { useTransactionFromSignerEthers, claimTransactionData } from '@neonevm/token-transfer-ethers';
+import { createWrapAndTransferSOLTransaction } from '@neonevm/token-transfer-ethers';
 import { decode } from 'bs58';
 import { sendSolanaTransaction, toSigner } from './utils';
-import { config } from 'dotenv';
-config();
+require('dotenv').config();
 
-// Constants
+// Configuration Constants
+const NEON_PRIVATE = process.env.NEON_PRIVATE;
+const PHANTOM_PRIVATE = process.env.PHANTOM_PRIVATE;
 const TOKEN_RECEIVER_CONTRACT = "0x1D1e8864997A2c684008539e780Df6934B6E4704";
-const WSOL_TOKEN_ADDRESS = "0xc7Fc9b46e479c5Cb42f6C458D1881e55E6B7986c";
+const proxyUrl = 'https://devnet.neonevm.org/solana/sol';
+const solanaUrl = 'https://api.devnet.solana.com';
+const TREASURY_POOL_COUNT = 128;
+const HOLDER_ACCOUNT_SPACE = 128 * 1024; // 128KB
 
-// ABIs
-const RECEIVER_ABI = [
+// Contract ABI
+const TOKEN_RECEIVER_ABI = [
     {
         "inputs": [
-            { "name": "amount", "type": "uint256" },
-            { "name": "nullifier", "type": "uint256" }
+            {
+                "internalType": "uint256",
+                "name": "amount",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "nullifier",
+                "type": "uint256"
+            }
         ],
         "name": "receiveWithNullifier",
         "outputs": [],
@@ -35,13 +44,81 @@ const RECEIVER_ABI = [
     }
 ];
 
-const ERC20_ABI = [
-    "function approve(address spender, uint256 amount) returns (bool)",
-    "function allowance(address owner, address spender) view returns (uint256)"
-];
+// Type Definitions
+interface BridgeResult {
+    signature: string;
+    neonWalletAddress: string;
+    amount: number;
+}
 
-// Helper function for holder account instruction
-function createHolderAccountInstruction(neonEvmProgram: PublicKey, solanaWallet: PublicKey, holderAccount: PublicKey, seed: string) {
+interface ContractCallResult {
+    signature: string;
+    nullifier: string;
+    amount: number;
+}
+
+interface CreateInstructionParams {
+    solanaWallet: PublicKey;
+    neonWallet: string;
+    holderAccount: PublicKey;
+    neonEvmProgram: PublicKey;
+    neonRawTransaction: string;
+    chainId: number;
+}
+
+// Helper Functions for Creating Instructions
+async function createExecFromDataInstruction({
+    solanaWallet,
+    neonWallet,
+    holderAccount,
+    neonEvmProgram,
+    neonRawTransaction,
+    chainId
+}: CreateInstructionParams): Promise<TransactionInstruction> {
+    const treasuryPoolIndex = Math.floor(Math.random() * TREASURY_POOL_COUNT);
+    const [balanceAccount] = neonBalanceProgramAddressV2(neonWallet, solanaWallet, neonEvmProgram, chainId);
+    const [treasuryPoolAddress] = collateralPoolAddress(neonEvmProgram, treasuryPoolIndex);
+
+    const instructionType = Buffer.from([EvmInstruction.TransactionExecuteFromInstruction]);
+    const poolIndex = Buffer.alloc(4);
+    poolIndex.writeUInt32LE(treasuryPoolIndex, 0);
+    const transactionData = Buffer.from(neonRawTransaction.slice(2), 'hex');
+    const data = Buffer.concat([instructionType, poolIndex, transactionData]);
+
+    const keys = [
+        { pubkey: holderAccount, isSigner: false, isWritable: true },
+        { pubkey: solanaWallet, isSigner: true, isWritable: true },
+        { pubkey: treasuryPoolAddress, isSigner: false, isWritable: true },
+        { pubkey: balanceAccount, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: true }
+    ];
+
+    return new TransactionInstruction({ programId: neonEvmProgram, keys, data });
+}
+
+function createAccountWithSeedInstruction(
+    solanaWallet: PublicKey,
+    seed: string,
+    holderAccount: PublicKey,
+    neonEvmProgram: PublicKey
+): TransactionInstruction {
+    return SystemProgram.createAccountWithSeed({
+        fromPubkey: solanaWallet,
+        newAccountPubkey: holderAccount,
+        basePubkey: solanaWallet,
+        seed,
+        lamports: 0,
+        space: HOLDER_ACCOUNT_SPACE,
+        programId: neonEvmProgram
+    });
+}
+
+function createHolderAccountInstruction(
+    holderAccount: PublicKey,
+    solanaWallet: PublicKey,
+    neonEvmProgram: PublicKey,
+    seed: string
+): TransactionInstruction {
     const instruction = Buffer.from([EvmInstruction.HolderCreate]);
     const seedLength = Buffer.alloc(8);
     seedLength.writeUInt32LE(seed.length, 0);
@@ -53,201 +130,140 @@ function createHolderAccountInstruction(neonEvmProgram: PublicKey, solanaWallet:
         { pubkey: solanaWallet, isSigner: true, isWritable: false }
     ];
 
-    return { programId: neonEvmProgram, keys, data };
+    return new TransactionInstruction({ programId: neonEvmProgram, keys, data });
 }
 
-// Token approval function
-async function approveTokenSpending(amount: bigint) {
-    if (!process.env.NEON_PRIVATE) throw new Error('NEON_PRIVATE not found in env');
-    
-    const provider = new JsonRpcProvider('https://devnet.neonevm.org/solana/sol');
-    const wallet = new Wallet(process.env.NEON_PRIVATE, provider);
-    
-    const tokenContract = new Contract(WSOL_TOKEN_ADDRESS, ERC20_ABI, wallet);
-    
-    const currentAllowance = await tokenContract.allowance(wallet.address, TOKEN_RECEIVER_CONTRACT);
-    
-    if (currentAllowance < amount) {
-        console.log(`Current allowance: ${currentAllowance}, approving ${amount}`);
-        const tx = await tokenContract.approve(TOKEN_RECEIVER_CONTRACT, amount);
-        await tx.wait();
-        console.log(`Approval tx hash: ${tx.hash}`);
-        return tx.hash;
-    } else {
-        console.log(`Allowance sufficient: ${currentAllowance} >= ${amount}`);
-        return null;
-    }
+function createDeleteHolderInstruction(
+    holderAccount: PublicKey,
+    solanaWallet: PublicKey,
+    neonEvmProgram: PublicKey
+): TransactionInstruction {
+    const data = Buffer.from([EvmInstruction.HolderDelete]);
+    const keys = [
+        { pubkey: holderAccount, isSigner: false, isWritable: true },
+        { pubkey: solanaWallet, isSigner: true, isWritable: false }
+    ];
+    return new TransactionInstruction({ programId: neonEvmProgram, keys, data });
 }
 
-// Main bridge function
-async function sendSOLWithNullifier(
-    amount: number,
-    receiverContract: string = TOKEN_RECEIVER_CONTRACT,
-    nullifier: bigint = BigInt(Math.floor(Math.random() * 1000000))
-) {
-    // First approve token spending
-    const lamports = BigInt(amount * Math.pow(10, 9));
-    console.log("Approving token spending...");
-    const approvalTx = await approveTokenSpending(lamports);
-    if (approvalTx) {
-        console.log("Waiting for approval confirmation...");
-        await new Promise(resolve => setTimeout(resolve, 5000));
-    }
+// Main Functions
+async function bridgeSOLToNeon(amount: number): Promise<BridgeResult> {
+    if (!NEON_PRIVATE) throw new Error('NEON_PRIVATE not found in env');
+    if (!PHANTOM_PRIVATE) throw new Error('PHANTOM_PRIVATE not found in env');
 
-    const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-    const provider = new JsonRpcProvider('https://devnet.neonevm.org/solana/sol');
-    const neonProxyRpcApi = new NeonProxyRpcApi('https://devnet.neonevm.org/solana/sol');
-    
-    if (!process.env.PHANTOM_PRIVATE) throw new Error('PHANTOM_PRIVATE not found in env');
-    const solanaWallet = Keypair.fromSecretKey(decode(process.env.PHANTOM_PRIVATE));
-    
-    // Check balance first
-    const walletBalance = await connection.getBalance(solanaWallet.publicKey);
-    const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(128 * 1024);
-    const solAmount = BigInt(amount * Math.pow(10, 9));
-
-    if (walletBalance < Number(solAmount) + rentExemptBalance) {
-        throw new Error(`Insufficient SOL. Need ${(Number(solAmount) + rentExemptBalance) / 1e9} SOL but have ${walletBalance / 1e9} SOL`);
-    }
+    const connection = new Connection(solanaUrl, 'confirmed');
+    const provider = new JsonRpcProvider(proxyUrl);
+    const neonProxyRpcApi = new NeonProxyRpcApi(proxyUrl);
+    const solanaWallet = Keypair.fromSecretKey(decode(PHANTOM_PRIVATE));
+    const neonWallet = new Wallet(NEON_PRIVATE);
     
     const proxyStatus = await neonProxyRpcApi.evmParams();
-    if (!proxyStatus.neonEvmProgramId) throw new Error('Neon EVM program ID not found');
-    
-    const neonEvmProgram = new PublicKey(proxyStatus.neonEvmProgramId);
     const gasTokens = await neonProxyRpcApi.nativeTokenList();
     const solToken = gasTokens.find(t => t.tokenName === 'SOL');
-    if (!solToken) throw new Error('SOL token configuration not found');
     
+    if (!solToken) throw new Error('SOL token configuration not found');
+    if (!proxyStatus.neonEvmProgramId) throw new Error('Neon EVM program ID not found');
+
+    const neonEvmProgram = new PublicKey(proxyStatus.neonEvmProgramId);
     const chainId = parseInt(solToken.tokenChainId, 16);
 
-    // Configure the SOL token
     const solTokenConfig: SPLToken = {
         chainId,
         address_spl: 'So11111111111111111111111111111111111111112',
-        address: receiverContract,
+        address: '0xc7Fc9b46e479c5Cb42f6C458D1881e55E6B7986c',
         decimals: 9,
         name: 'SOL',
         symbol: 'SOL',
-        logoURI: ''
+        logoURI: 'https://raw.githubusercontent.com/neonlabsorg/token-list/master/assets/solana-wsol-logo.svg'
     };
 
-    // Create the transaction
-    const transaction = new Transaction();
-    const associatedTokenAddress = getAssociatedTokenAddressSync(
-        new PublicKey(solTokenConfig.address_spl),
-        solanaWallet.publicKey
-    );
-
-    // Create wallet signer for the bridge
-    const walletSigner = new Wallet(
-        keccak256(Buffer.from(`${receiverContract.slice(2)}${solanaWallet.publicKey.toBase58()}`, 'utf-8')),
-        provider
-    );
-
-    // Get PDA for approval
-    const [delegatePDA] = authAccountAddress(walletSigner.address, neonEvmProgram, solTokenConfig);
-    const [holderAccount, holderSeed] = await holderAccountData(neonEvmProgram, solanaWallet.publicKey);
-
-    // 1. Create holder account and initialize it
-    transaction.add(
-        SystemProgram.createAccountWithSeed({
-            fromPubkey: solanaWallet.publicKey,
-            newAccountPubkey: holderAccount,
-            basePubkey: solanaWallet.publicKey,
-            seed: holderSeed,
-            lamports: rentExemptBalance,
-            space: 128 * 1024,
-            programId: neonEvmProgram
-        })
-    );
-    
-    // Initialize the holder account
-    transaction.add(createHolderAccountInstruction(neonEvmProgram, solanaWallet.publicKey, holderAccount, holderSeed));
-
-    // 2. Create wSOL account if needed
-    const wSOLAccount = await connection.getAccountInfo(associatedTokenAddress);
-    if (!wSOLAccount) {
-        transaction.add(
-            createAssociatedTokenAccountInstruction(
-                solanaWallet.publicKey,
-                associatedTokenAddress,
-                solanaWallet.publicKey,
-                new PublicKey(solTokenConfig.address_spl)
-            )
-        );
-    }
-
-    // 3. Transfer SOL to wSOL
-    transaction.add(
-        SystemProgram.transfer({
-            fromPubkey: solanaWallet.publicKey,
-            toPubkey: associatedTokenAddress,
-            lamports: solAmount
-        }),
-        createSyncNativeInstruction(associatedTokenAddress)
-    );
-
-    // 4. Approve delegate
-    transaction.add(
-        createApproveInstruction(
-            associatedTokenAddress,
-            delegatePDA,
-            solanaWallet.publicKey,
-            solAmount
-        )
-    );
-
-    // 5. Create the claim data with receiveWithNullifier encoding
-    const receiverInterface = new Interface(RECEIVER_ABI);
-    const methodData = receiverInterface.encodeFunctionData(
-        "receiveWithNullifier",
-        [solAmount, nullifier]
-    );
-
-    // 6. Create the claim data and signature
-    const signedTransaction = await useTransactionFromSignerEthers(methodData, walletSigner, solTokenConfig.address);
-
-    // 7. Create the claim instruction
-    const { neonKeys, legacyAccounts } = await createClaimInstruction({
-        proxyApi: neonProxyRpcApi,
-        neonTransaction: signedTransaction,
+    const transaction = await createWrapAndTransferSOLTransaction({
         connection,
+        proxyApi: neonProxyRpcApi,
         neonEvmProgram,
+        solanaWallet: solanaWallet.publicKey,
+        neonWallet: neonWallet.address,
+        walletSigner: new Wallet(NEON_PRIVATE, provider),
         splToken: solTokenConfig,
-        associatedTokenAddress,
-        signerAddress: walletSigner.address,
-        fullAmount: solAmount
+        amount,
+        chainId
     });
 
-    // 8. Add legacy account instructions if any
-    for (const account of legacyAccounts) {
-        const instruction = await createAccountBalanceForLegacyAccountInstruction({
-            connection,
-            account,
-            solanaWallet: solanaWallet.publicKey,
-            neonEvmProgram,
-            chainId
-        });
-        if (instruction) {
-            transaction.add(instruction);
-        }
-    }
+    const signature = await sendSolanaTransaction(connection, transaction, [toSigner(solanaWallet)], true);
+    
+    return {
+        signature,
+        neonWalletAddress: neonWallet.address,
+        amount
+    };
+}
 
-    // 9. Add the execution instruction
+async function sendToTokenReceiver(amount: number): Promise<ContractCallResult> {
+    if (!NEON_PRIVATE) throw new Error('NEON_PRIVATE not found in env');
+    if (!PHANTOM_PRIVATE) throw new Error('PHANTOM_PRIVATE not found in env');
+
+    const connection = new Connection(solanaUrl, 'confirmed');
+    const provider = new JsonRpcProvider(proxyUrl);
+    const neonProxyRpcApi = new NeonProxyRpcApi(proxyUrl);
+    const solanaWallet = Keypair.fromSecretKey(decode(PHANTOM_PRIVATE));
+    const neonWallet = new Wallet(NEON_PRIVATE, provider);
+
+    const proxyStatus = await neonProxyRpcApi.evmParams();
+    const gasTokens = await neonProxyRpcApi.nativeTokenList();
+    const solToken = gasTokens.find(t => t.tokenName === 'SOL');
+    
+    if (!solToken) throw new Error('SOL token configuration not found');
+    if (!proxyStatus.neonEvmProgramId) throw new Error('Neon EVM program ID not found');
+
+    const neonEvmProgram = new PublicKey(proxyStatus.neonEvmProgramId);
+    const chainId = parseInt(solToken.tokenChainId, 16);
+
+    // Generate nullifier
+    const nullifier = Math.floor(Date.now() / 1000) * 1000 + Math.floor(Math.random() * 1000);
+
+    // Create contract interface and encode function call
+    const tokenReceiverInterface = new Interface(TOKEN_RECEIVER_ABI);
+    const data = tokenReceiverInterface.encodeFunctionData("receiveWithNullifier", [
+        parseUnits(amount.toString(), 9),
+        nullifier
+    ]);
+
+    // Create the EVM transaction data
+    const evmTxData = {
+        to: TOKEN_RECEIVER_CONTRACT,
+        data,
+        nonce: await neonWallet.getNonce(),
+        value: "0x0",
+        gasLimit: "0x5F5E100",
+        gasPrice: "0x0",
+        chainId
+    };
+
+    // Create and sign the raw transaction
+    const rawTransaction = await neonWallet.signTransaction(evmTxData);
+
+    // Create holder account
+    const [holderAccount, holderSeed] = await holderAccountData(neonEvmProgram, solanaWallet.publicKey);
+
+    // Create Solana transaction
+    const transaction = new Transaction();
+    
+    // Add all required instructions in sequence
     transaction.add(
-        createExecFromDataInstructionV2({
+        createAccountWithSeedInstruction(solanaWallet.publicKey, holderSeed, holderAccount, neonEvmProgram),
+        createHolderAccountInstruction(holderAccount, solanaWallet.publicKey, neonEvmProgram, holderSeed),
+        await createExecFromDataInstruction({
             solanaWallet: solanaWallet.publicKey,
-            neonWallet: receiverContract,
+            neonWallet: neonWallet.address,
             holderAccount,
             neonEvmProgram,
-            neonRawTransaction: signedTransaction.rawTransaction,
-            neonKeys,
-            chainId,
-            neonPoolCount: '128'
-        })
+            neonRawTransaction: rawTransaction,
+            chainId
+        }),
+        createDeleteHolderInstruction(holderAccount, solanaWallet.publicKey, neonEvmProgram)
     );
 
-    // Send the transaction
+    // Send the transaction through Solana
     const signature = await sendSolanaTransaction(
         connection,
         transaction,
@@ -258,21 +274,47 @@ async function sendSOLWithNullifier(
     return {
         signature,
         nullifier: nullifier.toString(),
-        amount,
-        receiverContract
+        amount
     };
 }
 
-// Main execution
-async function main() {
+// Test Implementation
+async function runTests() {
+    console.log('Running tests...');
+    
     try {
-        const result = await sendSOLWithNullifier(0.1);
-        console.log("Transaction completed:", result);
+        // Test 1: Bridge SOL
+        console.log('Test 1: Bridging SOL to Neon wallet');
+        const testAmount = 0.01;
+        const bridgeResult = await bridgeSOLToNeon(testAmount);
+        console.assert(bridgeResult.signature, 'Should return a valid signature');
+        console.assert(bridgeResult.amount === testAmount, 'Amount should match');
+        console.log('Bridge transaction signature:', bridgeResult.signature);
+        console.log('Test 1 passed ✓');
+
+        // Wait for bridge confirmation
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
+        // Test 2: Send to TokenReceiver through Solana
+        console.log('Test 2: Sending to TokenReceiver contract through Solana');
+        const contractResult = await sendToTokenReceiver(testAmount);
+        console.assert(contractResult.signature, 'Should return a valid Solana signature');
+        console.assert(contractResult.nullifier, 'Should return a valid nullifier');
+        console.assert(contractResult.amount === testAmount, 'Amount should match');
+        console.log('Contract transaction signature:', contractResult.signature);
+        console.log('Nullifier:', contractResult.nullifier);
+        console.log('Test 2 passed ✓');
+
+        console.log('All tests passed! ✓');
     } catch (error) {
-        console.error("Error:", error);
+        console.error('Test failed:', error);
+        throw error;
     }
 }
 
-main();
+// Run tests if this file is being run directly
+if (require.main === module) {
+    runTests().catch(console.error);
+}
 
-export { sendSOLWithNullifier };
+export { bridgeSOLToNeon, sendToTokenReceiver, TOKEN_RECEIVER_CONTRACT };
