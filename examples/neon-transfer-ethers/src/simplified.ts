@@ -113,22 +113,27 @@ async function sendToTokenReceiver(amount: number): Promise<ContractCallResult> 
         nullifier
     ]);
 
+    // Get the latest nonce for the wallet
+    const nonce = await provider.getTransactionCount(neonWallet.address, "latest");
+    
     // Get the optimal gas price (paid in SOL)
     const feeData = await provider.getFeeData();
-
-    // Create and send the transaction
+    
+    // Create transaction with explicit nonce
     const transaction = await neonWallet.sendTransaction({
         to: TOKEN_RECEIVER_CONTRACT,
         data,
         value: "0x0",
         gasLimit: "0x5F5E100", // 100M gas
         gasPrice: feeData.gasPrice || undefined,
+        nonce: nonce // Explicitly set the nonce
     });
 
-    // Wait for confirmation
-    const receipt = await transaction.wait();
-    // throw error if no hash
+    // Wait for confirmation with longer timeout and more confirmations
+    const receipt = await transaction.wait(2); // Wait for 2 confirmations
+    
     if (!receipt || !receipt.hash) throw new Error('Transaction failed');
+    
     return {
         txHash: receipt.hash,
         nullifier: nullifier.toString(),
@@ -149,9 +154,9 @@ async function runTests() {
         console.log('Bridge transaction signature:', bridgeResult.signature);
         console.log('Test 1 passed ✓');
 
-        // Wait for bridge confirmation
+        // Wait for bridge confirmation with longer delay
         console.log('Waiting for bridge confirmation...');
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, 15000)); // Increased to 15 seconds
 
         // Test 2: Send to TokenReceiver using standard EVM transaction
         console.log('Test 2: Sending to TokenReceiver contract');
