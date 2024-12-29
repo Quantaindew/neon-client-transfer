@@ -13,26 +13,6 @@ const TOKEN_RECEIVER_CONTRACT = "0x1D1e8864997A2c684008539e780Df6934B6E4704";
 const proxyUrl = 'https://devnet.neonevm.org/solana/sol';
 const solanaUrl = 'https://api.devnet.solana.com';
 
-const TOKEN_RECEIVER_ABI = [
-    {
-        "inputs": [
-            {
-                "internalType": "uint256",
-                "name": "amount",
-                "type": "uint256"
-            },
-            {
-                "internalType": "uint256",
-                "name": "nullifier",
-                "type": "uint256"
-            }
-        ],
-        "name": "receiveWithNullifier",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    }
-];
 
 interface BridgeResult {
     signature: string;
