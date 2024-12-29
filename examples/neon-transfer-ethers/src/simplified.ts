@@ -1,9 +1,10 @@
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from '@solana/web3.js';
-import { JsonRpcProvider, Wallet} from 'ethers';
-import { createAssociatedTokenAccountInstruction, createClaimInstruction, EthersSignedTransaction, MintTransferParams, NEON_HEAP_FRAME, NeonMintTxParams, NeonProxyRpcApi, neonTransferMintTransaction, SPLToken, toFullAmount } from '@neonevm/token-transfer-core';
-import { claimTransactionData, useTransactionFromSignerEthers } from '@neonevm/token-transfer-ethers';
+import { JsonRpcProvider, Wallet, Interface} from 'ethers';
+import { Amount, createAssociatedTokenAccountInstruction, createClaimInstruction, EthersSignedTransaction, MintTransferParams, NEON_HEAP_FRAME, NeonMintTxParams, NeonProxyRpcApi, neonTransferMintTransaction, SPLToken, toFullAmount } from '@neonevm/token-transfer-core';
+import {  useTransactionFromSignerEthers } from '@neonevm/token-transfer-ethers';
 import { decode } from 'bs58';
 import { sendSolanaTransaction, toSigner } from './utils';
+import { erc20Abi } from './erc20';
 import { getAssociatedTokenAddressSync, createSyncNativeInstruction, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 require('dotenv').config();
 
@@ -13,6 +14,15 @@ const TOKEN_RECEIVER_CONTRACT = "0x1D1e8864997A2c684008539e780Df6934B6E4704";
 
 const proxyUrl = 'https://devnet.neonevm.org/solana/sol';
 const solanaUrl = 'https://api.devnet.solana.com';
+
+export function erc20ForSPLContract(): Interface {
+    return new Interface(erc20Abi);
+  }
+
+export function claimTransactionData(associatedToken: PublicKey, neonWallet: string, amount: Amount): string {
+    const fullAmount = BigInt(amount.toString());
+    return erc20ForSPLContract().encodeFunctionData('claimTo', [associatedToken.toBuffer(), neonWallet, fullAmount]);
+  }
 
 export async function createWrapAndTransferSOLTransaction(params: MintTransferParams<Wallet>): Promise<Transaction> {
     const { connection, proxyApi, neonEvmProgram, solanaWallet, neonWallet, walletSigner, splToken, amount, chainId, neonHeapFrame = NEON_HEAP_FRAME } = params;
