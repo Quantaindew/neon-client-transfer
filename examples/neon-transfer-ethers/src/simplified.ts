@@ -1,5 +1,5 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
-import { Interface, JsonRpcProvider, Wallet, parseUnits } from 'ethers';
+import { JsonRpcProvider, Wallet} from 'ethers';
 import { NeonProxyRpcApi, SPLToken } from '@neonevm/token-transfer-core';
 import { createWrapAndTransferSOLTransaction } from '@neonevm/token-transfer-ethers';
 import { decode } from 'bs58';
