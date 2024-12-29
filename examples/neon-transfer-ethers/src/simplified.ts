@@ -108,10 +108,14 @@ async function bridgeSOLToNeon(amount: number): Promise<BridgeResult> {
     const neonEvmProgram = new PublicKey(proxyStatus.neonEvmProgramId);
     const chainId = parseInt(solToken.tokenChainId, 16);
 
+    // create a random uint256 BigInt as string
+    const randomBigInt = BigInt(Math.floor(Math.random() * 1000000000000000000)).toString();
+    console.log('Random BigInt:', randomBigInt);
+
     const solTokenConfig: SPLToken = {
         chainId,
         address_spl: 'So11111111111111111111111111111111111111112',
-        address: '0x8053E6e199C9f89B3E5E4114Cb8bF45eE1928420',
+        address: '0x1AfB06bdd4b69dD1a2D428a38f03F01652755494',
         decimals: 9,
         name: 'SOL',
         symbol: 'SOL',
