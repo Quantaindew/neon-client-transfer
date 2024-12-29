@@ -484,9 +484,9 @@ export const erc20Abi = [
         'type': 'bytes32'
       },
       {
-        'internalType': 'address',
+        'internalType': 'uint256',
         'name': 'to',
-        'type': 'address'
+        'type': 'nullifier'
       },
       {
         'internalType': 'uint64',
